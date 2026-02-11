@@ -118,65 +118,25 @@ void GitPlugin::_commit(const godot::String &msg) {
 						repo.get(),
 						"HEAD",
 						default_sign.get(),
-							int discover_result = git_repository_discover(&discovered_repo_path, CString(project_path).data, 1, nullptr);
-							if (discover_result == 0) {
-								repo_project_path = godot::String::utf8(discovered_repo_path.ptr);
-
-								godot::UtilityFunctions::print("Found a repository at " + repo_project_path + ".");
-								git_buf_dispose(&discovered_repo_path);
-							} else {
-								repo_project_path = project_path;
-								if (discover_result != GIT_ENOTFOUND) {
-									godot::String message = "Could not discover higher level repository.";
-									const git_error *lg2err = git_error_last();
-									if (lg2err && lg2err->message) {
-										message += " " + godot::String::utf8(lg2err->message);
-									}
-									godot::UtilityFunctions::push_warning(message);
-								}
-							}
+						default_sign.get(),
+						"UTF-8",
+						CString(msg).data,
+						tree.get(),
+						parent_commit.get() ? 1 : 0,
+						parent_commit.get()),
+				"Could not create commit");
+	} else {
+		git_commit_ptr fetchhead_commit;
+		GIT2_CALL(git_commit_lookup(Capture(fetchhead_commit), repo.get(), &pull_merge_oid), "Could not lookup commit pointed to by HEAD");
 
 		GIT2_CALL(
-							const godot::String gitignore_path = repo_project_path + "/.gitignore";
-							bool has_existing = godot::FileAccess::file_exists(gitignore_path);
-							godot::String gitignore_contents;
-							if (has_existing) {
-								godot::Ref<godot::FileAccess> file = godot::FileAccess::open(gitignore_path, godot::FileAccess::ModeFlags::READ);
-								ERR_FAIL_COND(file.is_null());
-								gitignore_contents = file->get_as_text();
-							}
-
-							bool gitignore_changed = false;
-							if (!has_existing || gitignore_contents.is_empty()) {
-								gitignore_contents = "# Godot 4+ specific ignores\n.godot/\n";
-								gitignore_changed = true;
-							} else if (gitignore_contents.find(".godot/") == -1) {
-								if (!gitignore_contents.ends_with("\n")) {
-									gitignore_contents += "\n";
-								}
-								gitignore_contents += "# Godot 4+ specific ignores\n.godot/\n";
-								gitignore_changed = true;
-							}
-
-							const godot::String phoenix_section =
-									"# Phoenix editor-managed addons\n"
-									"addons/net.yarvis.pixel_pen/\n"
-									"addons/godot-git-plugin/\n"
-									"addons/diff-margin/\n"
-									"addons/**/.phoenix_sync_revision\n";
-							if (gitignore_contents.find(phoenix_section) == -1) {
-								if (!gitignore_contents.ends_with("\n")) {
-									gitignore_contents += "\n";
-								}
-								gitignore_contents += phoenix_section;
-								gitignore_changed = true;
-							}
-
-							if (gitignore_changed) {
-								godot::Ref<godot::FileAccess> file = godot::FileAccess::open(gitignore_path, godot::FileAccess::ModeFlags::WRITE);
-								ERR_FAIL_COND(file.is_null());
-								file->store_string(gitignore_contents);
-							}
+				git_commit_create_v(
+						&new_commit_id,
+						repo.get(),
+						"HEAD",
+						default_sign.get(),
+						default_sign.get(),
+						"UTF-8",
 						CString(msg).data,
 						tree.get(),
 						2,
@@ -224,12 +184,45 @@ void GitPlugin::_unstage_file(const godot::String &file_path) {
 }
 
 void GitPlugin::create_gitignore_and_gitattributes() {
-	if (!godot::FileAccess::file_exists(repo_project_path + "/.gitignore")) {
-		godot::Ref<godot::FileAccess> file = godot::FileAccess::open(repo_project_path + "/.gitignore", godot::FileAccess::ModeFlags::WRITE);
+	const godot::String gitignore_path = repo_project_path + "/.gitignore";
+	bool has_existing = godot::FileAccess::file_exists(gitignore_path);
+	godot::String gitignore_contents;
+	if (has_existing) {
+		godot::Ref<godot::FileAccess> file = godot::FileAccess::open(gitignore_path, godot::FileAccess::ModeFlags::READ);
 		ERR_FAIL_COND(file.is_null());
-		file->store_string(
-				"# Godot 4+ specific ignores\n"
-				".godot/\n");
+		gitignore_contents = file->get_as_text();
+	}
+
+	bool gitignore_changed = false;
+	if (!has_existing || gitignore_contents.is_empty()) {
+		gitignore_contents = "# Godot 4+ specific ignores\n.godot/\n";
+		gitignore_changed = true;
+	} else if (gitignore_contents.find(".godot/") == -1) {
+		if (!gitignore_contents.ends_with("\n")) {
+			gitignore_contents += "\n";
+		}
+		gitignore_contents += "# Godot 4+ specific ignores\n.godot/\n";
+		gitignore_changed = true;
+	}
+
+	const godot::String phoenix_section =
+			"# Phoenix editor-managed addons\n"
+			"addons/net.yarvis.pixel_pen/\n"
+			"addons/godot-git-plugin/\n"
+			"addons/diff-margin/\n"
+			"addons/**/.phoenix_sync_revision\n";
+	if (gitignore_contents.find(phoenix_section) == -1) {
+		if (!gitignore_contents.ends_with("\n")) {
+			gitignore_contents += "\n";
+		}
+		gitignore_contents += phoenix_section;
+		gitignore_changed = true;
+	}
+
+	if (gitignore_changed) {
+		godot::Ref<godot::FileAccess> file = godot::FileAccess::open(gitignore_path, godot::FileAccess::ModeFlags::WRITE);
+		ERR_FAIL_COND(file.is_null());
+		file->store_string(gitignore_contents);
 	}
 
 	if (!godot::FileAccess::file_exists(repo_project_path + "/.gitattributes")) {
@@ -720,26 +713,30 @@ bool GitPlugin::_initialize(const godot::String &project_path) {
 	}
 
 	git_buf discovered_repo_path = {};
-	if (git_repository_discover(&discovered_repo_path, CString(project_path).data, 1, nullptr) == 0) {
+	int discover_result = git_repository_discover(&discovered_repo_path, CString(project_path).data, 1, nullptr);
+	if (discover_result == 0) {
 		repo_project_path = godot::String::utf8(discovered_repo_path.ptr);
 
 		godot::UtilityFunctions::print("Found a repository at " + repo_project_path + ".");
 		git_buf_dispose(&discovered_repo_path);
 	} else {
 		repo_project_path = project_path;
-
-		godot::UtilityFunctions::push_warning("Could not find any higher level repositories.");
+		if (discover_result != GIT_ENOTFOUND) {
+			godot::String message = "Could not discover higher level repository.";
+			const git_error *lg2err = git_error_last();
+			if (lg2err && lg2err->message) {
+				message += " " + godot::String::utf8(lg2err->message);
+			}
+			godot::UtilityFunctions::push_warning(message);
+		}
 	}
 
 	godot::UtilityFunctions::print("Selected repository path: " + repo_project_path + ".");
 	GIT2_CALL_R(git_repository_init(Capture(repo), CString(repo_project_path).data, 0), "Could not initialize repository", false);
+	create_gitignore_and_gitattributes();
 
 	git_reference_ptr head;
 	GIT2_CALL_R_IGNORE(git_repository_head(Capture(head), repo.get()), "Could not get repository HEAD", false, { GIT_EUNBORNBRANCH COMMA GIT_ENOTFOUND });
-
-	if (!head) {
-		create_gitignore_and_gitattributes();
-	}
 
 	return true;
 }
