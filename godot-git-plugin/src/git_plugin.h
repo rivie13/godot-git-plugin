@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <vector>
 
 #include "git_callbacks.h"
 #include "git_wrappers.h"
