@@ -82,6 +82,9 @@ def ssl_platform_flags(env):
     elif env["platform"] == "macos":
         if env["macos_deployment_target"] != "default":
             args.append("-mmacosx-version-min=%s" % env["macos_deployment_target"])
+        # Newer Xcode toolchains can treat ranlib's "has no symbols" warnings as build-breaking.
+        # Tell OpenSSL to invoke ranlib with the suppression flag.
+        args.append('RANLIB="ranlib -no_warning_for_no_symbols"')
         # OSXCross toolchain setup.
         if sys.platform != "darwin" and "OSXCROSS_ROOT" in os.environ:
             for k in ["CC", "CXX", "AR", "AS", "RANLIB"]:
